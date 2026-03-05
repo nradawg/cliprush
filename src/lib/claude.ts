@@ -5,9 +5,10 @@ const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-3-5-sonnet-20241022";
+const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5";
 
-const SYSTEM_PROMPT = `You are an expert short-form video strategist and viral content analyst. Your job is to identify exactly 6 clip moments from a transcript that would perform exceptionally well as standalone short clips (TikTok, YouTube Shorts, Instagram Reels).
+function buildSystemPrompt(clipCount: number): string {
+  return `You are an expert short-form video strategist and viral content analyst. Your job is to identify exactly ${clipCount} clip moments from a transcript that would perform exceptionally well as standalone short clips (TikTok, YouTube Shorts, Instagram Reels).
 
 SELECTION CRITERIA — only pick moments that have ALL of the following:
 1. A STRONG HOOK in the first 5 seconds that makes someone stop scrolling
@@ -32,40 +33,48 @@ CONFIDENCE scoring (0–100):
 - 90–100: Guaranteed viral potential
 - 70–89: Strong clip, clear standalone value
 - 50–69: Good clip but needs strong thumbnail
-- Below 50: Do not include
+- Below 50: Do not include — find something better
 
-Return ONLY a valid JSON array of exactly 6 objects. No markdown, no explanation, no preamble.
+If the transcript does not have enough distinct strong moments for ${clipCount} clips, return as many high-quality clips as the content supports. Never pad with weak picks just to hit the number. Never return more than ${clipCount}.
 
-Each object:
+You MUST return ONLY a valid JSON object. No markdown, no explanation, no preamble. The object must match this exact shape:
+
 {
-  "start_time": "mm:ss or hh:mm:ss",
-  "end_time": "mm:ss or hh:mm:ss",
-  "title": "max 60 chars",
-  "hook": "max 90 chars — the opening line or moment",
-  "why_it_works": "one sentence",
-  "category": "intense" | "funny" | "emotional",
-  "confidence": number 0-100
+  "clips": [
+    {
+      "start_time": "mm:ss or hh:mm:ss",
+      "end_time": "mm:ss or hh:mm:ss",
+      "title": "max 60 chars — punchy, specific, no clickbait fluff",
+      "hook": "max 90 chars — the exact line or moment that opens the clip",
+      "why_it_works": "one concise sentence explaining the psychological or entertainment hook",
+      "category": "intense" | "funny" | "emotional",
+      "confidence": number between 0 and 100
+    }
+  ],
+  "returnedCount": number
 }
 
-If no timestamps exist, estimate based on ~130 words/minute reading pace.`;
+If the transcript has NO timestamps, estimate timestamps based on reading pace (~130 words per minute). Still return the same schema.`;
+}
 
 function hasTimestamps(transcript: string): boolean {
   return /\[\d{1,2}:\d{2}/.test(transcript);
 }
 
 export async function analyzeTranscript(
-  transcript: string
-): Promise<{ clips: ClipResult[]; usedEstimatedTimestamps: boolean }> {
+  transcript: string,
+  clipCount: number
+): Promise<{ clips: ClipResult[]; usedEstimatedTimestamps: boolean; returnedCount: number }> {
   const hasTs = hasTimestamps(transcript);
 
   const userMessage = hasTs
-    ? `Here is the transcript with timestamps. Identify the 6 best clip moments:\n\n${transcript}`
-    : `Here is the transcript WITHOUT timestamps. Estimate timestamps based on reading pace and identify the 6 best clip moments.\n\n${transcript}`;
+    ? `Here is the transcript with timestamps. Identify the ${clipCount} best clip moments:\n\n${transcript}`
+    : `Here is the transcript WITHOUT timestamps. Estimate timestamps based on reading pace (~130 words per minute) and identify the ${clipCount} best clip moments. The timestamps you return will be estimates.\n\n${transcript}`;
 
   const message = await client.messages.create({
     model: MODEL,
-    max_tokens: 2048,
-    system: SYSTEM_PROMPT,
+    max_tokens: Math.max(2048, clipCount * 200),
+    system: buildSystemPrompt(clipCount),
     messages: [{ role: "user", content: userMessage }],
   });
 
@@ -79,22 +88,28 @@ export async function analyzeTranscript(
     .replace(/\s*```\s*$/, "")
     .trim();
 
-  let clips: ClipResult[];
+  let parsed: { clips: ClipResult[]; returnedCount?: number };
   try {
-    clips = JSON.parse(cleaned) as ClipResult[];
+    parsed = JSON.parse(cleaned);
   } catch {
     throw new Error("Model returned invalid JSON — please try again");
   }
 
-  if (!Array.isArray(clips) || clips.length === 0) {
+  if (!parsed.clips || !Array.isArray(parsed.clips) || parsed.clips.length === 0) {
     throw new Error("Model returned no clips — please try again");
   }
 
-  clips = clips.slice(0, 6);
+  // Hard cap — never exceed what was requested
+  const clips = parsed.clips.slice(0, clipCount);
+  const returnedCount = clips.length;
 
   if (!hasTs) {
-    clips = clips.map((c) => ({ ...c, timestampsAreEstimates: true }));
+    return {
+      clips: clips.map((c) => ({ ...c, timestampsAreEstimates: true })),
+      usedEstimatedTimestamps: true,
+      returnedCount,
+    };
   }
 
-  return { clips, usedEstimatedTimestamps: !hasTs };
+  return { clips, usedEstimatedTimestamps: false, returnedCount };
 }

@@ -9,10 +9,13 @@ interface InputCardProps {
   isLoading: boolean;
 }
 
+const CLIP_COUNT_OPTIONS = [6, 10, 15, 20, 30, 40, 50];
+
 export default function InputCard({ onResults, onLoading, isLoading }: InputCardProps) {
   const [tab, setTab] = useState<"url" | "transcript">("url");
   const [urlValue, setUrlValue] = useState("");
   const [transcriptValue, setTranscriptValue] = useState("");
+  const [clipCount, setClipCount] = useState(6);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -33,7 +36,10 @@ export default function InputCard({ onResults, onLoading, isLoading }: InputCard
   async function handleSubmit() {
     setError(null);
     const err = validate();
-    if (err) { setError(err); return; }
+    if (err) {
+      setError(err);
+      return;
+    }
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -49,6 +55,7 @@ export default function InputCard({ onResults, onLoading, isLoading }: InputCard
         body: JSON.stringify({
           mode: tab,
           input: tab === "url" ? urlValue.trim() : transcriptValue.trim(),
+          clipCount,
         }),
         signal: controller.signal,
       });
@@ -73,11 +80,15 @@ export default function InputCard({ onResults, onLoading, isLoading }: InputCard
 
   return (
     <div className="bg-surface-1 border border-surface-3 rounded-2xl overflow-hidden glow-orange">
+      {/* Tabs */}
       <div className="flex border-b border-surface-3">
         {(["url", "transcript"] as const).map((t) => (
           <button
             key={t}
-            onClick={() => { setTab(t); setError(null); }}
+            onClick={() => {
+              setTab(t);
+              setError(null);
+            }}
             className={`flex-1 flex items-center justify-center gap-2 py-4 text-sm font-medium transition-colors ${
               tab === t
                 ? "tab-active text-white bg-surface-2"
@@ -104,6 +115,7 @@ export default function InputCard({ onResults, onLoading, isLoading }: InputCard
       </div>
 
       <div className="p-6">
+        {/* URL input */}
         {tab === "url" ? (
           <div>
             <label className="block text-xs text-zinc-500 mb-2 font-mono uppercase tracking-wider">
@@ -118,7 +130,7 @@ export default function InputCard({ onResults, onLoading, isLoading }: InputCard
               className="w-full bg-surface-2 border border-surface-4 rounded-xl px-4 py-3.5 text-white placeholder-zinc-600 text-sm focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/30 transition-all"
             />
             <p className="text-xs text-zinc-600 mt-2">
-              Works best with videos that have captions enabled.
+              Works best with videos that have captions enabled. If fetch fails, switch to the transcript tab.
             </p>
           </div>
         ) : (
@@ -139,6 +151,37 @@ export default function InputCard({ onResults, onLoading, isLoading }: InputCard
           </div>
         )}
 
+        {/* Clip count selector */}
+        <div className="mt-5">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-xs text-zinc-500 font-mono uppercase tracking-wider">
+              Number of clips
+            </label>
+            <span className="text-xs font-mono font-medium text-brand-500">{clipCount} clips</span>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            {CLIP_COUNT_OPTIONS.map((n) => (
+              <button
+                key={n}
+                onClick={() => setClipCount(n)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium border transition-all ${
+                  clipCount === n
+                    ? "bg-brand-500/20 border-brand-500/60 text-brand-400"
+                    : "bg-surface-2 border-surface-4 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300"
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+          {clipCount > 20 && (
+            <p className="text-xs text-zinc-600 mt-2">
+              Larger clip counts require longer transcripts and take more time to analyze.
+            </p>
+          )}
+        </div>
+
+        {/* Error */}
         {error && (
           <div className="mt-4 flex items-start gap-3 bg-red-950/40 border border-red-800/40 rounded-xl px-4 py-3">
             <svg className="w-4 h-4 text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -148,6 +191,7 @@ export default function InputCard({ onResults, onLoading, isLoading }: InputCard
           </div>
         )}
 
+        {/* Submit */}
         <button
           onClick={handleSubmit}
           disabled={isLoading}
@@ -166,7 +210,7 @@ export default function InputCard({ onResults, onLoading, isLoading }: InputCard
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
-              FIND CLIPS
+              FIND {clipCount} CLIPS
             </>
           )}
         </button>

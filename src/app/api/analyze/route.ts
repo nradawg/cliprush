@@ -4,6 +4,9 @@ import { fetchYouTubeTranscript } from "@/lib/transcript";
 import { analyzeTranscript } from "@/lib/claude";
 import type { AnalyzeResponse } from "@/lib/types";
 
+const MIN_CLIPS = 6;
+const MAX_CLIPS = 50;
+
 function getIp(req: NextRequest): string {
   return (
     req.headers.get("x-forwarded-for")?.split(",")[0].trim() ??
@@ -23,7 +26,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
     );
   }
 
-  let body: { mode: string; input: string };
+  let body: { mode: string; input: string; clipCount?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -31,6 +34,18 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
   }
 
   const { mode, input } = body;
+
+  const rawCount = Number(body.clipCount ?? MIN_CLIPS);
+  if (!Number.isInteger(rawCount) || rawCount < MIN_CLIPS || rawCount > MAX_CLIPS) {
+    return NextResponse.json(
+      {
+        clips: [],
+        error: `clipCount must be an integer between ${MIN_CLIPS} and ${MAX_CLIPS}.`,
+      },
+      { status: 400 }
+    );
+  }
+  const clipCount = rawCount;
 
   if (!input || typeof input !== "string" || input.trim().length < 10) {
     return NextResponse.json(
@@ -45,13 +60,18 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
     try {
       transcript = await fetchYouTubeTranscript(input.trim());
     } catch (err) {
+      const isAutoFetchFailed =
+        err instanceof Error && err.message === "AUTO_FETCH_FAILED";
+
       console.error("Transcript fetch failed:", err);
+
       return NextResponse.json(
         {
           clips: [],
           transcriptFetchFailed: true,
-          error:
-            "Couldn't fetch the transcript for that video. Captions may be disabled or the video is private. Please paste the transcript manually using the other tab.",
+          error: isAutoFetchFailed
+            ? "Could not automatically fetch the transcript for this video. This can happen due to server-side restrictions when running on Vercel. Please copy the transcript manually and paste it using the Paste Transcript tab."
+            : "Could not fetch the transcript. Please use the Paste Transcript tab instead.",
         },
         { status: 422 }
       );
@@ -67,11 +87,35 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
     );
   }
 
+  const wordCount = transcript.split(/\s+/).length;
+  const minWordsNeeded = clipCount * 130;
+  if (wordCount < minWordsNeeded * 0.4) {
+    return NextResponse.json(
+      {
+        clips: [],
+        error: `This transcript looks too short to produce ${clipCount} clips. Try reducing the clip count or pasting a longer transcript.`,
+      },
+      { status: 400 }
+    );
+  }
+
   const cappedTranscript = transcript.slice(0, 60000);
 
   try {
-    const { clips, usedEstimatedTimestamps } = await analyzeTranscript(cappedTranscript);
-    return NextResponse.json({ clips, usedEstimatedTimestamps }, { status: 200 });
+    const { clips, usedEstimatedTimestamps, returnedCount } = await analyzeTranscript(
+      cappedTranscript,
+      clipCount
+    );
+
+    return NextResponse.json(
+      {
+        clips,
+        usedEstimatedTimestamps,
+        requestedCount: clipCount,
+        returnedCount,
+      },
+      { status: 200 }
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error during analysis";
     console.error("Claude analysis error:", message);

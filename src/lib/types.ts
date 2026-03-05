@@ -14,11 +14,14 @@ export interface ClipResult {
 export interface AnalyzeRequest {
   mode: "url" | "transcript";
   input: string;
+  clipCount: number;
 }
 
 export interface AnalyzeResponse {
   clips: ClipResult[];
   transcriptFetchFailed?: boolean;
   usedEstimatedTimestamps?: boolean;
+  requestedCount?: number;
+  returnedCount?: number;
   error?: string;
 }
